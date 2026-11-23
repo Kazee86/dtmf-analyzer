@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>STFT Denoiser &amp; DTMF Extractor : Kelompok G</title>
+
+  <!-- Typography: Space Grotesk (UI) + JetBrains Mono (Data/Freq) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700;800&display=swap" rel="stylesheet" />
+
+  <!-- Core Libraries -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <script src="https://unpkg.com/lenis@1.1.18/dist/lenis.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/motion@11.11.17/dist/motion.js"></script>
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Space Grotesk"', 'system-ui', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          },
+          colors: {
+            telecom: {
+              canvas: '#070b10',
+              panel: '#0e1520',
+              panelElevated: '#141e2c',
+              border: '#1f2c3d',
+              borderMuted: '#162230',
+              accentCyan: '#06b6d4',
+              accentAmber: '#f59e0b',
+              accentGreen: '#10b981',
+            }
+          }
+        }
+      }
+    };
+  </script>
+
+  <style>
+    :root {
+      color-scheme: dark;
+    }
+    html.lenis, html.lenis body {
+      height: auto;
+    }
+    .lenis.lenis-smooth {
+      scroll-behavior: auto !important;
+    }
+    .lenis.lenis-smooth [data-lenis-prevent] {
+      overscroll-behavior: contain;
+    }
+    .lenis.lenis-stopped {
+      overflow: hidden;
+    }
+    .lenis.lenis-scrolling iframe {
+      pointer-events: none;
+    }
+
+    /* Accessibility Affordances & Focus Indicators */
+    button, [role="button"], select, input[type="range"], input[type="checkbox"], label[for], a {
+      cursor: pointer;
+    }
+    button:disabled, input:disabled, select:disabled, a[aria-disabled="true"] {
+      cursor: not-allowed;
+    }
+    :focus-visible {
+      outline: 2px solid #06b6d4 !important;
+      outline-offset: 2px !important;
+    }
+
+    /* Audio Player Dark Restyle */
+    audio {
+      filter: invert(90%) hue-rotate(180deg);
+      border-radius: 6px;
+    }
+
+    /* Range slider custom track */
+    input[type="range"] {
+      accent-color: #06b6d4;
+    }
+
+    /* Reduced Motion */
+    @media (prefers-reduced-motion: reduce) {
+      *, ::before, ::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+      }
+    }
+  </style>
+</head>
+<body class="bg-[#070b10] text-slate-100 font-sans min-h-screen antialiased selection:bg-cyan-500/20 selection:text-cyan-300">
+
+  <!-- Header Section -->
+  <header class="border-b border-telecom-border bg-[#0b111a]/95 backdrop-blur-md sticky top-0 z-40">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+      <div class="flex items-center gap-3">
+        <div class="w-3 h-3 rounded-full bg-emerald-400 shadow-[0_0_10px_#10b981]"></div>
+        <div>
+          <div class="flex items-center gap-2">
+            <span class="px-2 py-0.5 text-[11px] font-mono font-semibold tracking-wider uppercase rounded bg-cyan-950/70 text-cyan-300 border border-cyan-800/60">
+              Kelompok G : Fase 1 &amp; 2
+            </span>
+            <span class="text-xs font-mono text-slate-400">DSP Diagnostic Workstation</span>
+          </div>
+          <h1 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-white mt-1">
+            Aplikasi Web Denoising STFT untuk Ekstraksi Nada DTMF
+          </h1>
+        </div>
+      </div>
+      <div class="text-xs font-mono flex flex-wrap items-center gap-2 text-slate-300">
+        <span class="px-2.5 py-1 rounded border border-telecom-border bg-telecom-panel">
+          <span class="text-amber-400">ITU-T Q.23</span> DTMF
+        </span>
+        <span class="px-2.5 py-1 rounded border border-telecom-border bg-telecom-panel">
+          <span class="text-cyan-400">STFT</span> Spectral Subtraction
+        </span>
+        <span class="px-2.5 py-1 rounded border border-telecom-border bg-telecom-panel">
+          <span class="text-emerald-400">Goertzel</span> Dual Tone
+        </span>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-8">
+
+    <!-- Alert / Notification Banners -->
+    <div id="errorBanner" class="hidden rounded-lg border border-rose-900/80 bg-rose-950/50 px-4 py-3 text-sm text-rose-200 flex items-start justify-between gap-3" role="alert">
+      <div>
+        <strong class="font-semibold text-rose-100">Gagal Memproses:</strong>
+        <span id="errorText" class="ml-1 text-rose-200"></span>
+      </div>
+      <button type="button" onclick="document.getElementById('errorBanner').classList.add('hidden')" aria-label="Tutup notifikasi error" class="text-rose-400 hover:text-rose-200 font-bold p-1">&times;</button>
+    </div>
+
+    <div id="warningBanner" class="hidden rounded-lg border border-amber-900/80 bg-amber-950/40 px-4 py-3 text-sm text-amber-200" role="status">
+      <div class="text-amber-300 font-semibold font-mono text-xs uppercase tracking-wider">
+        Catatan Rekonstruksi Sinyal
+      </div>
+      <ul id="warningList" class="list-disc list-inside mt-1.5 space-y-0.5 text-xs text-amber-200/90 font-mono"></ul>
+    </div>
+
+    <!-- Section: Simulator Numpad Telepon (Alur Terbalik) -->
+    <section class="workstation-panel space-y-4">
+      <div class="flex flex-wrap items-center justify-between gap-2 border-b border-telecom-border pb-3">
+        <div>
+          <h2 class="text-xl font-bold tracking-tight text-white">Simulator Numpad Telepon : Generator Sinyal DTMF ke .wav</h2>
+          <p class="text-xs text-slate-300 mt-1">Sintesis nada keypad telepon standar ITU-T Q.23 dengan injeksi derau saluran AWGN terkontrol.</p>
+        </div>
+        <button
+          type="button"
+          id="toggleNumpadBtn"
+          aria-expanded="true"
+          aria-controls="numpadPanelBody"
+          class="text-xs font-mono font-semibold px-3 py-1.5 rounded border border-telecom-border bg-telecom-panelElevated text-slate-200 hover:bg-slate-800 transition"
+        >
+          Sembunyikan Numpad
+        </button>
+      </div>
+
+      <div id="numpadPanelBody" class="grid grid-cols-1 lg:grid-cols-12 gap-6 pt-2">
+        <!-- Keypad Telepon (4x4 Matrix) -->
+        <div class="lg:col-span-5 bg-telecom-panel rounded-lg border border-telecom-border p-4 space-y-3">
+          <!-- Terminal Display -->
+          <div class="bg-[#05080c] rounded p-3 space-y-2">
+            <div class="flex items-center justify-between text-[11px] font-mono text-slate-400">
+              <span id="numpadFreqReadout" class="text-cyan-400 font-semibold">Siap memanggil : Tekan tombol keypad</span>
+              <label class="inline-flex items-center gap-1.5 select-none text-slate-300">
+                <input id="numpadSoundToggle" type="checkbox" checked class="w-3.5 h-3.5 accent-cyan-500 rounded" />
+                <span>Audio Sidetone</span>
+              </label>
+            </div>
+            <div class="flex items-center justify-between gap-2">
+              <input
+                id="numpadDisplay"
+                type="text"
+                maxlength="40"
+                placeholder="Ketik / pencet tombol..."
+                aria-label="Tampilan nomor telepon DTMF"
+                class="w-full bg-transparent text-2xl font-mono font-bold tracking-widest text-emerald-400 placeholder:text-slate-400 placeholder:text-sm focus:outline-none uppercase"
+              />
+              <div class="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  id="numpadBackspaceBtn"
+                  title="Hapus 1 karakter"
+                  aria-label="Hapus karakter terakhir"
+                  class="px-2.5 py-1.5 rounded border border-telecom-border bg-telecom-panelElevated hover:bg-slate-800 text-xs font-mono text-slate-200 transition"
+                >
+                  &#9003;
+                </button>
+                <button
+                  type="button"
+                  id="numpadClearBtn"
+                  title="Bersihkan display"
+                  aria-label="Bersihkan display keypad"
+                  class="px-2.5 py-1.5 rounded border border-rose-900/60 bg-rose-950/40 hover:bg-rose-900/60 text-xs font-mono text-rose-300 transition"
+                >
+                  CLEAR
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- DTMF Keypad Grid 4x4 -->
+          {% set dtmf_keys = [
+            ('1', '', 697, 1209), ('2', 'ABC', 697, 1336), ('3', 'DEF', 697, 1477), ('A', '697 Hz', 697, 1633),
+            ('4', 'GHI', 770, 1209), ('5', 'JKL', 770, 1336), ('6', 'MNO', 770, 1477), ('B', '770 Hz', 770, 1633),
+            ('7', 'PRS', 852, 1209), ('8', 'TUV', 852, 1336), ('9', 'WXYZ', 852, 1477), ('C', '852 Hz', 852, 1633),
+            ('*', '', 941, 1209), ('0', '+', 941, 1336), ('#', '', 941, 1477), ('D', '941 Hz', 941, 1633)
+          ] %}
+          <div class="grid grid-cols-4 gap-2">
+            {% for key, sub, fl, fh in dtmf_keys %}
+            <button
+              type="button"
+              data-dtmf-key="{{ key }}"
+              data-low="{{ fl }}"
+              data-high="{{ fh }}"
+              aria-label="Tombol {{ key }}, nada {{ fl }} Hz dan {{ fh }} Hz"
+              class="dtmf-key-btn group relative flex flex-col items-center justify-center py-2.5 px-2 rounded border border-telecom-border bg-telecom-panelElevated hover:border-cyan-500/60 hover:bg-[#182535] active:bg-cyan-950/80 transition select-none"
+            >
+              <span class="text-lg font-bold font-mono {{ 'text-cyan-400' if key in ['A','B','C','D'] else 'text-white' }}">{{ key }}</span>
+              <span class="text-[10px] font-mono text-slate-400 group-hover:text-cyan-300 h-3.5">{{ sub }}</span>
+            </button>
+            {% endfor %}
+          </div>
+
+          <div class="flex items-center justify-between text-[10px] font-mono text-slate-400 px-1 pt-1">
+            <span>Baris Rendah: 697, 770, 852, 941 Hz</span>
+            <span>Kolom Tinggi: 1209, 1336, 1477, 1633 Hz</span>
+          </div>
+        </div>
+
+        <!-- Parameter Sintesis & Aksi Ekspor -->
+        <div class="lg:col-span-7 bg-telecom-panel rounded-lg border border-telecom-border p-4 flex flex-col justify-between space-y-4">
+          <div class="space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-2 border-b border-telecom-border pb-3">
+              <label class="inline-flex items-center gap-2 text-sm font-semibold text-slate-200">
+                <input id="genAddNoise" type="checkbox" checked class="w-4 h-4 accent-cyan-500 rounded" />
+                <span>Injeksi Derau Saluran (AWGN)</span>
+              </label>
+              <span class="text-xs font-mono text-cyan-400 font-semibold">
+                SNR Input: <span id="genSnrVal">10.0 dB</span>
+              </span>
+            </div>
+
+            <div id="genSnrGroup" class="space-y-1">
+              <label for="genSnrRange" class="sr-only">Rasio Sinyal terhadap Derau (SNR dB)</label>
+              <input id="genSnrRange" type="range" min="0" max="30" step="1" value="10" class="w-full accent-cyan-500" />
+              <div class="flex justify-between text-[11px] font-mono text-slate-400">
+                <span>0 dB (Derau Ekstrem)</span>
+                <span>15 dB (Sedang)</span>
+                <span>30 dB (Bersih)</span>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+              <div>
+                <label for="genFsSelect" class="block text-xs font-mono font-semibold text-slate-300 mb-1">Sampling Rate</label>
+                <select id="genFsSelect" class="w-full rounded border border-telecom-border bg-[#0a1017] px-2.5 py-1.5 text-xs font-mono text-slate-200 focus:border-cyan-500">
+                  <option value="8000" selected>8000 Hz (Telepon PCM)</option>
+                  <option value="16000">16000 Hz (Wideband Audio)</option>
+                </select>
+              </div>
+              <div>
+                <label for="genToneMs" class="block text-xs font-mono font-semibold text-slate-300 mb-1">Durasi Nada (ms)</label>
+                <input id="genToneMs" type="number" min="25" max="500" value="90" class="w-full rounded border border-telecom-border bg-[#0a1017] px-2.5 py-1.5 text-xs font-mono text-slate-200 focus:border-cyan-500" />
+              </div>
+              <div>
+                <label for="genPauseMs" class="block text-xs font-mono font-semibold text-slate-300 mb-1">Jeda Nada (ms)</label>
+                <input id="genPauseMs" type="number" min="15" max="500" value="65" class="w-full rounded border border-telecom-border bg-[#0a1017] px-2.5 py-1.5 text-xs font-mono text-slate-200 focus:border-cyan-500" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Pratinjau Audio & Tombol Ekspor -->
+          <div class="space-y-3 pt-2 border-t border-telecom-border">
+            <div class="flex items-center justify-between text-xs font-mono text-slate-300 mb-1">
+              <span>Pratinjau Berkas Audio Sintesis (.wav)</span>
+              <span id="genStatusText" class="text-slate-400">Belum disintesis</span>
+            </div>
+            <audio id="genPlayer" controls class="w-full h-8" aria-label="Pemutar audio hasil generator DTMF"></audio>
+
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+              <button
+                type="button"
+                id="genCreateBtn"
+                class="py-2.5 px-3 rounded border border-cyan-600/70 bg-cyan-950/40 text-cyan-300 hover:bg-cyan-900/50 font-mono font-semibold text-xs transition flex items-center justify-center gap-1.5"
+              >
+                Sintesis .wav
+              </button>
+              <a
+                id="genDownloadLink"
+                href="#"
+                download="dtmf_tone.wav"
+                aria-disabled="true"
+                class="py-2.5 px-3 rounded border border-telecom-border bg-telecom-panelElevated text-slate-400 hover:text-white hover:bg-slate-800 font-mono font-semibold text-xs text-center transition pointer-events-none opacity-40 flex items-center justify-center"
+              >
+                Unduh .wav
+              </a>
+              <button
+                type="button"
+                id="genSendToTestBtn"
+                class="py-2.5 px-3 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-mono font-semibold text-xs shadow transition flex items-center justify-center gap-1.5"
+              >
+                Kirim dan Uji Denoising
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Workstation Grid: Parameter STFT & Observasi DTMF -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+      <!-- Left Column: Parameter STFT Denoising -->
+      <section class="lg:col-span-5 workstation-panel bg-telecom-panel rounded-lg border border-telecom-border p-5 space-y-4">
+        <div class="border-b border-telecom-border pb-3">
+          <h2 class="text-xl font-bold tracking-tight text-white">1. Ruang Uji Audio &amp; Parameter STFT</h2>
+          <p class="text-xs text-slate-300 mt-1">Unggah file audio berderau, atur resolusi waktu-frekuensi, dan faktor oversubtraksi.</p>
+        </div>
+
+        <form id="processForm" class="space-y-4">
+          <!-- Upload WAV -->
+          <div>
+            <div class="flex items-center justify-between mb-1.5">
+              <label for="audioInput" class="block text-xs font-mono font-semibold text-slate-200">Berkas Audio (.wav)</label>
+              <button
+                type="button"
+                id="loadSampleBtn"
+                class="text-xs font-mono text-cyan-400 hover:text-cyan-300 underline underline-offset-2"
+              >
+                Muat Contoh Uji (0812345#)
+              </button>
+            </div>
+            <label
+              for="audioInput"
+              class="flex flex-col items-center justify-center w-full border border-dashed border-telecom-border hover:border-cyan-500 rounded p-4 bg-[#0a1017] transition group"
+            >
+              <span class="text-xs font-mono text-slate-200 group-hover:text-cyan-300" id="fileLabel">Pilih berkas .wav atau seret ke sini</span>
+              <span class="text-[11px] font-mono text-slate-400 mt-0.5">Maksimal 15 MB : PCM 8/16 kHz atau Float</span>
+              <input id="audioInput" name="audio" type="file" accept=".wav,audio/wav" class="sr-only" />
+            </label>
+          </div>
+
+          <!-- Dual Audio Players (No nested card border, clean divided panel) -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 border-y border-telecom-border py-3">
+            <div>
+              <div class="text-[11px] font-mono font-semibold text-slate-300 mb-1">Audio Asli (Berderau)</div>
+              <audio id="noisyPlayer" controls class="w-full h-8" aria-label="Pemutar audio asli berderau"></audio>
+            </div>
+            <div>
+              <div class="text-[11px] font-mono font-semibold text-emerald-400 mb-1">Hasil Denoising (ISTFT)</div>
+              <audio id="denoisedPlayer" controls class="w-full h-8" aria-label="Pemutar audio hasil filter STFT"></audio>
+            </div>
+          </div>
+
+          <!-- Parameter Windowing -->
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label for="npersegSelect" class="block text-xs font-mono font-semibold text-slate-300 mb-1">
+                Panjang Window (N)
+              </label>
+              <select id="npersegSelect" name="nperseg" class="w-full rounded border border-telecom-border bg-[#0a1017] px-2.5 py-1.5 text-xs font-mono text-slate-200 focus:border-cyan-500">
+                <option value="256" selected>256 (Respons Cepat : Default 8 kHz)</option>
+                <option value="512">512 (Seimbang : Default 16 kHz)</option>
+                <option value="1024">1024 (Resolusi Frekuensi Tinggi)</option>
+                <option value="2048">2048 (Window Lebar : Waspada Pre-Echo)</option>
+              </select>
+            </div>
+            <div>
+              <label for="windowTypeSelect" class="block text-xs font-mono font-semibold text-slate-300 mb-1">
+                Bentuk Window
+              </label>
+              <select id="windowTypeSelect" name="window_type" class="w-full rounded border border-telecom-border bg-[#0a1017] px-2.5 py-1.5 text-xs font-mono text-slate-200 focus:border-cyan-500">
+                <option value="hann" selected>Hann (COLA Terjamin)</option>
+                <option value="hamming">Hamming</option>
+                <option value="blackman">Blackman</option>
+                <option value="boxcar">Rectangular</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Overlap Window -->
+          <div>
+            <div class="flex justify-between text-xs font-mono font-semibold text-slate-300 mb-1">
+              <label for="overlapRange">Rasio Overlap Window</label>
+              <span id="overlapVal" class="text-cyan-400">75%</span>
+            </div>
+            <input id="overlapRange" name="overlap_pct" type="range" min="25" max="87.5" step="12.5" value="75" class="w-full accent-cyan-500" />
+            <div class="flex justify-between text-[10px] font-mono text-slate-400">
+              <span>25%</span><span>50%</span><span>75%</span><span>87.5%</span>
+            </div>
+          </div>
+
+          <!-- Oversubtraction Factor (Alpha) -->
+          <div>
+            <div class="flex justify-between text-xs font-mono font-semibold text-slate-300 mb-1">
+              <label for="alphaRange">Faktor Oversubtraksi (α)</label>
+              <span id="alphaVal" class="text-cyan-400">2.0</span>
+            </div>
+            <input id="alphaRange" name="alpha" type="range" min="0" max="6" step="0.1" value="2.0" class="w-full accent-cyan-500" />
+            <p class="text-[10px] font-mono text-slate-400 mt-0.5">
+              Nilai α lebih besar meredam derau lebih agresif. Nilai terlalu tinggi memicu musical noise.
+            </p>
+          </div>
+
+          <!-- Spectral Floor (Beta) & Silent Segment -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <div class="flex justify-between text-xs font-mono font-semibold text-slate-300 mb-1">
+                <label for="betaRange">Spectral Floor (β)</label>
+                <span id="betaVal" class="text-cyan-400">0.020</span>
+              </div>
+              <input id="betaRange" name="beta" type="range" min="0" max="0.20" step="0.005" value="0.02" class="w-full accent-cyan-500" />
+            </div>
+            <div>
+              <label for="silentModeSelect" class="block text-xs font-mono font-semibold text-slate-300 mb-1">
+                Estimasi Noise PSD
+              </label>
+              <select id="silentModeSelect" name="silent_mode" class="w-full rounded border border-telecom-border bg-[#0a1017] px-2.5 py-1.5 text-xs font-mono text-slate-200 focus:border-cyan-500">
+                <option value="auto" selected>Otomatis (Frame Terendah)</option>
+                <option value="initial">Segmen Awal (N ms)</option>
+                <option value="manual">Rentang Waktu Manual (s)</option>
+              </select>
+            </div>
+          </div>
+
+          <div id="silentMsGroup" class="hidden">
+            <label for="silentMsInput" class="block text-xs font-mono font-semibold text-slate-300 mb-1">
+              Durasi Segmen Senyap Awal (ms)
+            </label>
+            <input id="silentMsInput" name="silent_ms" type="number" min="20" max="5000" value="150" class="w-full rounded border border-telecom-border bg-[#0a1017] px-2.5 py-1.5 text-xs font-mono text-slate-200" />
+          </div>
+
+          <div id="silentManualGroup" class="hidden grid grid-cols-2 gap-3">
+            <div>
+              <label for="silentStartInput" class="block text-xs font-mono font-semibold text-slate-300 mb-1">
+                Mulai Derau (detik)
+              </label>
+              <input id="silentStartInput" name="silent_start_s" type="number" min="0" step="0.05" value="0.0" class="w-full rounded border border-telecom-border bg-[#0a1017] px-2.5 py-1.5 text-xs font-mono text-slate-200" />
+            </div>
+            <div>
+              <label for="silentEndInput" class="block text-xs font-mono font-semibold text-slate-300 mb-1">
+                Akhir Derau (detik)
+              </label>
+              <input id="silentEndInput" name="silent_end_s" type="number" min="0.05" step="0.05" value="0.5" class="w-full rounded border border-telecom-border bg-[#0a1017] px-2.5 py-1.5 text-xs font-mono text-slate-200" />
+            </div>
+          </div>
+
+          <!-- Sekuens Target Evaluasi -->
+          <div>
+            <label for="targetInput" class="block text-xs font-mono font-semibold text-slate-300 mb-1">
+              Target Sekuens Pembanding (Opsional : Uji Akurasi DTMF)
+            </label>
+            <input
+              id="targetInput"
+              name="target_sequence"
+              type="text"
+              placeholder="Contoh: 0812345#"
+              class="w-full rounded border border-telecom-border bg-[#0a1017] px-3 py-2 text-xs font-mono uppercase text-slate-200 placeholder:text-slate-400 focus:border-cyan-500"
+            />
+          </div>
+
+          <button
+            type="submit"
+            id="submitBtn"
+            class="w-full py-2.5 px-4 rounded bg-cyan-600 hover:bg-cyan-500 disabled:bg-cyan-900 text-white font-mono font-semibold text-xs tracking-wide shadow transition flex items-center justify-center gap-2"
+          >
+            <span id="submitSpinner" class="hidden w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin"></span>
+            <span id="submitText">Jalankan Analisis STFT &amp; Dekoding</span>
+          </button>
+        </form>
+      </section>
+
+      <!-- Right Column: Hasil Dekoding & Evaluasi Skenario P4 -->
+      <section class="lg:col-span-7 space-y-6">
+
+        <!-- DTMF Decoder Output Panel -->
+        <div class="workstation-panel bg-telecom-panel rounded-lg border border-telecom-border p-5 space-y-4">
+          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-telecom-border pb-3">
+            <div>
+              <h2 class="text-xl font-bold tracking-tight text-white">2. Terjemah Jadi Angka (DTMF Decoder)</h2>
+              <p class="text-xs text-slate-300 mt-1">Ekstraksi komponen frekuensi rendah (697–941 Hz) dan tinggi (1209–1633 Hz).</p>
+            </div>
+            <div class="flex items-center gap-2">
+              <span id="audioMetaBadge" class="hidden text-xs px-2.5 py-1 rounded bg-telecom-panelElevated text-slate-300 border border-telecom-border font-mono"></span>
+              <button
+                type="button"
+                id="copyBtn"
+                disabled
+                class="px-3 py-1.5 rounded border border-telecom-border bg-telecom-panelElevated text-xs font-mono font-semibold text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-40 transition"
+              >
+                Salin Hasil
+              </button>
+            </div>
+          </div>
+
+          <!-- Phosphor Readout Box -->
+          <div class="bg-[#05080c] text-emerald-400 rounded p-4 flex items-center justify-between gap-4">
+            <div>
+              <div class="text-[10px] uppercase font-mono tracking-widest text-slate-400">Urutan Simbol Terdeteksi</div>
+              <div id="decodedSequence" class="text-3xl sm:text-4xl font-mono font-bold tracking-widest mt-1 text-emerald-400 drop-shadow-[0_0_8px_#10b98160]">
+                MENUNGGU DATA
+              </div>
+            </div>
+            <div id="targetComparisonBox" class="hidden text-right">
+              <div class="text-[10px] uppercase font-mono tracking-widest text-slate-400">Akurasi vs Target</div>
+              <div id="targetAccuracyText" class="text-2xl font-bold font-mono mt-1"></div>
+              <div id="targetDiffText" class="text-xs text-slate-400 font-mono"></div>
+            </div>
+          </div>
+
+          <!-- Tone Breakdown Table -->
+          <div class="overflow-x-auto max-h-56 rounded bg-[#05080c]">
+            <table class="min-w-full text-xs text-left">
+              <thead class="bg-telecom-panelElevated text-slate-300 font-mono uppercase sticky top-0 border-b border-telecom-border">
+                <tr>
+                  <th class="px-3 py-2">#</th>
+                  <th class="px-3 py-2">Simbol</th>
+                  <th class="px-3 py-2">Rentang Waktu (s)</th>
+                  <th class="px-3 py-2">Durasi</th>
+                  <th class="px-3 py-2">f_Low (Hz)</th>
+                  <th class="px-3 py-2">f_High (Hz)</th>
+                  <th class="px-3 py-2">Keyakinan</th>
+                </tr>
+              </thead>
+              <tbody id="tonesTableBody" class="divide-y divide-telecom-border font-mono">
+                <tr>
+                  <td colspan="7" class="px-3 py-6 text-center text-slate-400">
+                    Belum ada hasil dekoding. Unggah berkas .wav atau gunakan simulator keypad untuk memulai.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Mutu Pemrosesan Skenario P4 -->
+        <div class="workstation-panel bg-telecom-panel rounded-lg border border-telecom-border p-5 space-y-4">
+          <div class="flex items-center justify-between border-b border-telecom-border pb-3">
+            <div>
+              <h2 class="text-xl font-bold tracking-tight text-white">3. Mutu Pemrosesan &amp; Evaluasi Kuantitatif</h2>
+              <p class="text-xs text-slate-300 mt-1">Pemantauan metrik reduksi derau, kontrol artefak ISTFT, dan latensi pemrosesan.</p>
+            </div>
+            <span id="colaBadge" class="hidden text-xs px-2.5 py-1 rounded font-mono font-semibold border"></span>
+          </div>
+
+          <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            <!-- SNR In -->
+            <div class="rounded p-3 bg-telecom-panelElevated/50">
+              <div class="text-[10px] font-mono font-semibold text-slate-400 uppercase">SNR Sebelum</div>
+              <div id="metricSnrIn" class="text-xl font-bold font-mono text-slate-200 mt-1">0.0 dB</div>
+              <div class="text-[10px] font-mono text-slate-400 mt-0.5">Estimasi aktif vs senyap</div>
+            </div>
+
+            <!-- SNR Out -->
+            <div id="cardSnrOut" class="rounded p-3 bg-telecom-panelElevated/50 transition">
+              <div class="text-[10px] font-mono font-semibold text-slate-400 uppercase">SNR Sesudah</div>
+              <div id="metricSnrOut" class="text-xl font-bold font-mono text-slate-200 mt-1">0.0 dB</div>
+              <div id="metricSnrGain" class="text-[10px] font-mono text-slate-400 mt-0.5">Target P4 : &ge; 25.0 dB</div>
+            </div>
+
+            <!-- Musical Noise -->
+            <div id="cardMusicalNoise" class="rounded p-3 bg-telecom-panelElevated/50 transition">
+              <div class="text-[10px] font-mono font-semibold text-slate-400 uppercase">Musical Noise (ΔCV)</div>
+              <div id="metricMusicalNoise" class="text-xl font-bold font-mono text-slate-200 mt-1">0.0 dB</div>
+              <div id="metricResidualNoise" class="text-[10px] font-mono text-slate-400 mt-0.5">Target P4 : &le; 0.0 dB</div>
+            </div>
+
+            <!-- Pre-Echo -->
+            <div id="cardPreEcho" class="rounded p-3 bg-telecom-panelElevated/50 transition">
+              <div class="text-[10px] font-mono font-semibold text-slate-400 uppercase">Pre-Echo</div>
+              <div id="metricPreEcho" class="text-xl font-bold font-mono text-slate-200 mt-1">0.0 dB</div>
+              <div class="text-[10px] font-mono text-slate-400 mt-0.5">Target P4 : &le; -30.0 dB</div>
+            </div>
+
+            <!-- Frame Latency -->
+            <div id="cardLatency" class="rounded p-3 bg-telecom-panelElevated/50 transition">
+              <div class="text-[10px] font-mono font-semibold text-slate-400 uppercase">Latensi / Frame</div>
+              <div id="metricFrameLatency" class="text-xl font-bold font-mono text-slate-200 mt-1">0.0 ms</div>
+              <div id="metricTotalLatency" class="text-[10px] font-mono text-slate-400 mt-0.5">Target P4 : &le; 40.0 ms</div>
+            </div>
+
+            <!-- Resolusi STFT -->
+            <div class="rounded p-3 bg-telecom-panelElevated/50">
+              <div class="text-[10px] font-mono font-semibold text-slate-400 uppercase">Resolusi Δf / Hop</div>
+              <div id="metricResolution" class="text-lg font-bold font-mono text-slate-200 mt-1">0.0 Hz / 0.0 ms</div>
+              <div id="metricFramesCount" class="text-[10px] font-mono text-slate-400 mt-0.5">Grid waktu-frekuensi STFT</div>
+            </div>
+          </div>
+        </div>
+
+      </section>
+    </div>
+
+    <!-- Section: Grafik Diagnostik Domain Waktu & Frekuensi (Plotly.js) -->
+    <section class="workstation-panel space-y-4">
+      <div class="border-b border-telecom-border pb-3">
+        <h2 class="text-xl font-bold tracking-tight text-white">4. Grafik Diagnostik Sebelum dan Sesudah Denoising</h2>
+        <p class="text-xs text-slate-300 mt-1">
+          Perbandingan bentuk gelombang domain waktu, spektrum FFT dengan penanda frekuensi DTMF, dan spektrogram STFT 2D.
+        </p>
+      </div>
+
+      <!-- Waveform & FFT Grid (Single-level cards) -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div class="border border-telecom-border rounded-lg p-4 bg-telecom-panel">
+          <h3 class="text-sm font-semibold tracking-normal text-slate-200 mb-2">Bentuk Gelombang (Waveform Sinyal)</h3>
+          <div class="relative w-full h-72">
+            <div class="plot-placeholder absolute inset-0 flex items-center justify-center text-xs font-mono text-slate-400 pointer-events-none">
+              Menunggu pemrosesan audio...
+            </div>
+            <div id="waveformPlot" class="w-full h-full"></div>
+          </div>
+        </div>
+
+        <div class="border border-telecom-border rounded-lg p-4 bg-telecom-panel">
+          <h3 class="text-sm font-semibold tracking-normal text-slate-200 mb-2">Spektrum Frekuensi (FFT 0–4000 Hz)</h3>
+          <div class="relative w-full h-72">
+            <div class="plot-placeholder absolute inset-0 flex items-center justify-center text-xs font-mono text-slate-400 pointer-events-none">
+              Menunggu pemrosesan audio...
+            </div>
+            <div id="fftPlot" class="w-full h-full"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Spectrograms Grid (Single-level cards) -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div class="border border-telecom-border rounded-lg p-4 bg-telecom-panel">
+          <h3 class="text-sm font-semibold tracking-normal text-slate-200 mb-2">Spektrogram STFT : Sebelum Denoising (Kotor)</h3>
+          <div class="relative w-full h-80">
+            <div class="plot-placeholder absolute inset-0 flex items-center justify-center text-xs font-mono text-slate-400 pointer-events-none">
+              Menunggu pemrosesan audio...
+            </div>
+            <div id="specNoisyPlot" class="w-full h-full"></div>
+          </div>
+        </div>
+
+        <div class="border border-telecom-border rounded-lg p-4 bg-telecom-panel">
+          <h3 class="text-sm font-semibold tracking-normal text-slate-200 mb-2">Spektrogram STFT : Sesudah Denoising (Bersih)</h3>
+          <div class="relative w-full h-80">
+            <div class="plot-placeholder absolute inset-0 flex items-center justify-center text-xs font-mono text-slate-400 pointer-events-none">
+              Menunggu pemrosesan audio...
+            </div>
+            <div id="specCleanPlot" class="w-full h-full"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Spectral Damping Map (Single-level card) -->
+      <div class="border border-telecom-border rounded-lg p-4 bg-telecom-panel">
+        <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+          <h3 class="text-sm font-semibold tracking-normal text-slate-200">Peta Redaman Spektral (Komponen Derau Dibuang : Sebelum dikurangi Sesudah, dB)</h3>
+          <span class="text-[11px] font-mono text-slate-400">Intensitas tinggi menunjukkan energi derau yang berhasil dieliminasi STFT.</span>
+        </div>
+        <div class="relative w-full h-72">
+          <div class="plot-placeholder absolute inset-0 flex items-center justify-center text-xs font-mono text-slate-400 pointer-events-none">
+            Menunggu pemrosesan audio...
+          </div>
+          <div id="specDiffPlot" class="w-full h-full"></div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="border-t border-telecom-border py-6 text-center text-xs font-mono text-slate-400">
+    <p>Aplikasi Web Denoising STFT untuk Ekstraksi Nada DTMF : Laboratorium Pemrosesan Sinyal Digital</p>
+  </footer>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
